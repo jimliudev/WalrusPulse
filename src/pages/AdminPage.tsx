@@ -20,6 +20,10 @@ import {
   SlidersHorizontal,
   XCircle,
   Power,
+  Users,
+  UserPlus,
+  UserMinus,
+  X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -31,7 +35,7 @@ import FieldRenderer from '@/components/FieldRenderer'
 import { useToast } from '@/components/ui/toast'
 
 import { readBlob } from '@/lib/walrus'
-import { fetchFormsCreatedBy } from '@/lib/sui'
+import { fetchFormsCreatedBy, buildAddAdminTx, buildRemoveAdminTx } from '@/lib/sui'
 import { buildCSV, downloadCSV } from '@/lib/csv'
 import { MODULE_NAME, PACKAGE_ID } from '@/config'
 import { Transaction } from '@mysten/sui/transactions'
@@ -412,6 +416,9 @@ function FormResponsesPanel({
       {/* Reward Pool */}
       <RewardPoolPanel form={form} toast={toast} onSuccess={refetchForm} />
 
+      {/* Admin management */}
+      <AdminsPanel form={form} toast={toast} onSuccess={refetchForm} />
+
       {/* Filter bar */}
       {!loadingResponses && responses.length > 0 && schema && (
         <div className="space-y-2">
@@ -597,6 +604,142 @@ function FormResponsesPanel({
         />
       ))}
     </div>
+  )
+}
+
+// ─── Admins Panel ─────────────────────────────────────────────────────────────
+
+function AdminsPanel({
+  form,
+  toast,
+  onSuccess,
+}: {
+  form: SuiFormObject
+  toast: ToastFn
+  onSuccess: () => void
+}) {
+  const account = useCurrentAccount()
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
+  const [newAdminInput, setNewAdminInput] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [removingAddr, setRemovingAddr] = useState<string | null>(null)
+
+  const isOwner = account?.address?.toLowerCase() === form.owner.toLowerCase()
+
+  const handleAdd = async () => {
+    const addr = newAdminInput.trim()
+    if (!addr) return
+    if (form.admins.includes(addr)) {
+      toast({ type: 'warning', title: 'Address is already an admin' })
+      return
+    }
+    setAdding(true)
+    try {
+      const tx = buildAddAdminTx(form.objectId, addr)
+      await signAndExecute({ transaction: tx as never })
+      toast({ type: 'success', title: 'Admin added', description: addr })
+      setNewAdminInput('')
+      onSuccess()
+    } catch (e) {
+      toast({ type: 'error', title: 'Failed to add admin', description: String(e) })
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const handleRemove = async (addr: string) => {
+    setRemovingAddr(addr)
+    try {
+      const tx = buildRemoveAdminTx(form.objectId, addr)
+      await signAndExecute({ transaction: tx as never })
+      toast({ type: 'success', title: 'Admin removed' })
+      onSuccess()
+    } catch (e) {
+      toast({ type: 'error', title: 'Failed to remove admin', description: String(e) })
+    } finally {
+      setRemovingAddr(null)
+    }
+  }
+
+  return (
+    <Card className="border-blue-200 bg-blue-50/30">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2 mb-3">
+          <Users className="h-5 w-5 text-blue-600" />
+          <div>
+            <CardTitle className="text-base text-blue-900">Co-admins</CardTitle>
+            <CardDescription className="text-blue-700 text-xs">
+              Can fund pool, send rewards, and close the form. Only the owner can add/remove.
+            </CardDescription>
+          </div>
+        </div>
+
+        {/* Current admins list */}
+        {form.admins.length === 0 ? (
+          <p className="text-xs text-slate-400 italic">No co-admins yet.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {form.admins.map((addr) => (
+              <div
+                key={addr}
+                className="flex items-center justify-between bg-white border border-blue-100 rounded-md px-3 py-1.5"
+              >
+                <span className="text-xs font-mono text-slate-700 truncate">{addr}</span>
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(addr)}
+                    disabled={removingAddr === addr}
+                    className="ml-2 shrink-0 text-slate-400 hover:text-red-500 disabled:opacity-50"
+                    title="Remove admin"
+                  >
+                    {removingAddr === addr ? (
+                      <LoadingSpinner size="sm" />
+                    ) : (
+                      <UserMinus className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add admin input (owner only) */}
+        {isOwner && (
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              type="text"
+              value={newAdminInput}
+              onChange={(e) => setNewAdminInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleAdd()
+                }
+              }}
+              placeholder="0x… Sui address"
+              className="flex-1 rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+            <Button
+              size="sm"
+              onClick={handleAdd}
+              disabled={adding || !newAdminInput.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white gap-1.5 shrink-0"
+            >
+              <UserPlus className="h-4 w-4" />
+              {adding ? 'Adding…' : 'Add Admin'}
+            </Button>
+          </div>
+        )}
+
+        {!isOwner && (
+          <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+            <X className="h-3 w-3" /> Only the form owner can manage admins.
+          </p>
+        )}
+      </CardHeader>
+    </Card>
   )
 }
 

@@ -1,7 +1,7 @@
 /// WalrusPulse — On-chain form registry backed by Walrus decentralised storage.
 ///
 /// Flow:
-///   1. Creator calls `create_form(title, description, schema_blob_id)`.
+///   1. Creator calls `create_form(title, description, schema_blob_id, initial_admins)`.
 ///      The schema JSON is stored on Walrus; only the blob-id is recorded here.
 ///      The resulting `Form` object is *shared* so anyone can submit responses.
 ///
@@ -13,6 +13,9 @@
 ///
 ///   4. The form owner can fund a SUI reward pool and manually send rewards
 ///      to deserving respondents. Each address can only be rewarded once per form.
+///
+///   5. The owner can add/remove co-admins who share most management permissions.
+///      Only the original owner can add/remove admins and withdraw the reward pool.
 module walrus_pulse::walrus_pulse {
     use sui::event;
     use sui::balance::{Self, Balance};
@@ -28,6 +31,7 @@ module walrus_pulse::walrus_pulse {
     const EInsufficientPool: u64 = 2;
     const EAlreadyRewarded: u64  = 3;
     const EZeroAmount: u64       = 4;
+    const ENotAuthorized: u64    = 5;
 
     // ── Structs ──────────────────────────────────────────────────────────────
 
@@ -38,8 +42,11 @@ module walrus_pulse::walrus_pulse {
         description: String,
         /// Walrus blob ID of the form schema JSON.
         schema_blob_id: String,
-        /// Address that created this form.
+        /// Address that created this form (has full ownership rights).
         owner: address,
+        /// Co-admin addresses — can manage the form but cannot withdraw the reward pool
+        /// or add/remove other admins.
+        admins: VecSet<address>,
         /// Ordered list of Walrus blob IDs for submitted responses.
         response_blob_ids: vector<String>,
         is_active: bool,
@@ -77,13 +84,23 @@ module walrus_pulse::walrus_pulse {
         remaining_pool: u64,
     }
 
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /// Returns true if the sender is the form owner or a co-admin.
+    fun is_authorized(form: &Form, ctx: &TxContext): bool {
+        let sender = ctx.sender();
+        sender == form.owner || vec_set::contains(&form.admins, &sender)
+    }
+
     // ── Entry functions ───────────────────────────────────────────────────────
 
     /// Create a new shared Form object and emit a `FormCreated` event.
+    /// `initial_admins` is an optional list of co-admin addresses.
     public entry fun create_form(
         title: vector<u8>,
         description: vector<u8>,
         schema_blob_id: vector<u8>,
+        initial_admins: vector<address>,
         ctx: &mut TxContext,
     ) {
         let uid = object::new(ctx);
@@ -93,6 +110,17 @@ module walrus_pulse::walrus_pulse {
         let title_str = string::utf8(title);
         let desc_str = string::utf8(description);
         let schema_str = string::utf8(schema_blob_id);
+
+        // Build admins VecSet, skipping the owner and duplicates
+        let mut admins = vec_set::empty<address>();
+        let mut i = 0u64;
+        while (i < initial_admins.length()) {
+            let admin = initial_admins[i];
+            if (admin != owner && !vec_set::contains(&admins, &admin)) {
+                vec_set::insert(&mut admins, admin);
+            };
+            i = i + 1;
+        };
 
         event::emit(FormCreated {
             form_id,
@@ -107,6 +135,7 @@ module walrus_pulse::walrus_pulse {
             description: desc_str,
             schema_blob_id: schema_str,
             owner,
+            admins,
             response_blob_ids: vector[],
             is_active: true,
             reward_pool: balance::zero<SUI>(),
@@ -134,21 +163,40 @@ module walrus_pulse::walrus_pulse {
         form.response_blob_ids.push_back(response_str);
     }
 
-    /// Deactivate a form so it no longer accepts responses. Only the owner can do this.
+    /// Deactivate a form so it no longer accepts responses.
+    /// Owner or any co-admin can call this.
     public entry fun deactivate_form(form: &mut Form, ctx: &TxContext) {
-        assert!(form.owner == ctx.sender(), ENotOwner);
+        assert!(is_authorized(form, ctx), ENotAuthorized);
         form.is_active = false;
+    }
+
+    // ── Admin management ──────────────────────────────────────────────────────
+
+    /// Add a co-admin to the form. Only the owner can call this.
+    public entry fun add_admin(form: &mut Form, new_admin: address, ctx: &TxContext) {
+        assert!(form.owner == ctx.sender(), ENotOwner);
+        if (!vec_set::contains(&form.admins, &new_admin)) {
+            vec_set::insert(&mut form.admins, new_admin);
+        };
+    }
+
+    /// Remove a co-admin from the form. Only the owner can call this.
+    public entry fun remove_admin(form: &mut Form, admin: address, ctx: &TxContext) {
+        assert!(form.owner == ctx.sender(), ENotOwner);
+        if (vec_set::contains(&form.admins, &admin)) {
+            vec_set::remove(&mut form.admins, &admin);
+        };
     }
 
     // ── Reward pool functions ─────────────────────────────────────────────────
 
-    /// Owner deposits SUI into the form's reward pool.
+    /// Owner or co-admin deposits SUI into the form's reward pool.
     public entry fun fund_reward_pool(
         form: &mut Form,
         payment: Coin<SUI>,
         ctx: &TxContext,
     ) {
-        assert!(form.owner == ctx.sender(), ENotOwner);
+        assert!(is_authorized(form, ctx), ENotAuthorized);
 
         let amount = coin::value(&payment);
         assert!(amount > 0, EZeroAmount);
@@ -162,7 +210,7 @@ module walrus_pulse::walrus_pulse {
         });
     }
 
-    /// Owner manually sends a SUI reward to a recipient address.
+    /// Owner or co-admin manually sends a SUI reward to a recipient address.
     /// Each address can only be rewarded once per form.
     public entry fun reward_respondent(
         form: &mut Form,
@@ -170,19 +218,14 @@ module walrus_pulse::walrus_pulse {
         amount: u64,
         ctx: &mut TxContext,
     ) {
-        // Security: only form owner can call this
-        assert!(form.owner == ctx.sender(), ENotOwner);
-        // Security: amount must be positive
+        assert!(is_authorized(form, ctx), ENotAuthorized);
         assert!(amount > 0, EZeroAmount);
-        // Security: pool must have enough balance
         assert!(balance::value(&form.reward_pool) >= amount, EInsufficientPool);
-        // Security: each address can only receive reward once
         assert!(!vec_set::contains(&form.rewarded, &recipient), EAlreadyRewarded);
 
         // Mark as rewarded before transfer (checks-effects-interactions)
         vec_set::insert(&mut form.rewarded, recipient);
 
-        // Split from pool and transfer to recipient
         let reward_balance = balance::split(&mut form.reward_pool, amount);
         let reward_coin = coin::from_balance(reward_balance, ctx);
         transfer::public_transfer(reward_coin, recipient);
@@ -195,7 +238,7 @@ module walrus_pulse::walrus_pulse {
         });
     }
 
-    /// Owner withdraws remaining SUI from the reward pool (e.g. when closing a form).
+    /// Owner-only: withdraw remaining SUI from the reward pool.
     public entry fun withdraw_reward_pool(
         form: &mut Form,
         ctx: &mut TxContext,
@@ -221,5 +264,8 @@ module walrus_pulse::walrus_pulse {
     public fun reward_pool_balance(form: &Form): u64 { balance::value(&form.reward_pool) }
     public fun is_rewarded(form: &Form, addr: address): bool {
         vec_set::contains(&form.rewarded, &addr)
+    }
+    public fun admins(form: &Form): vector<address> {
+        *vec_set::keys(&form.admins)
     }
 }

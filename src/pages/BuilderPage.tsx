@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
   arrayMove,
 } from '@dnd-kit/sortable'
-import { Eye, EyeOff, Send, Plus, Waves } from 'lucide-react'
+import { Eye, EyeOff, Send, Plus, Waves, X, UserPlus } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,6 +49,8 @@ export default function BuilderPage() {
   const [preview, setPreview] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [previewAnswers, setPreviewAnswers] = useState<Record<string, unknown>>({})
+  const [adminAddresses, setAdminAddresses] = useState<string[]>([])
+  const [newAdminInput, setNewAdminInput] = useState('')
 
   // ── DnD ────────────────────────────────────────────────────────────────────
 
@@ -130,7 +132,7 @@ export default function BuilderPage() {
 
       // 2. Create Form object on Sui
       toast({ type: 'info', title: 'Creating form on Sui…' })
-      const tx = buildCreateFormTx(schema.title, schema.description, schemaBlobId)
+      const tx = buildCreateFormTx(schema.title, schema.description, schemaBlobId, adminAddresses)
       const result = await signAndExecute({ transaction: tx as never })
 
       // 3. Extract the created Form object ID from effects
@@ -244,6 +246,73 @@ export default function BuilderPage() {
                 disabled={preview}
               />
             </div>
+
+            {/* Co-admins */}
+            {!preview && (
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Co-admins
+                  <span className="text-slate-400 font-normal text-xs">(optional)</span>
+                </Label>
+                <p className="text-xs text-slate-500 mt-0.5 mb-2">
+                  These addresses can manage this form — fund the pool, send rewards, and close it.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    value={newAdminInput}
+                    onChange={(e) => setNewAdminInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        const addr = newAdminInput.trim()
+                        if (addr && !adminAddresses.includes(addr)) {
+                          setAdminAddresses((prev) => [...prev, addr])
+                          setNewAdminInput('')
+                        }
+                      }
+                    }}
+                    placeholder="0x… Sui address"
+                    className="font-mono text-sm flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const addr = newAdminInput.trim()
+                      if (addr && !adminAddresses.includes(addr)) {
+                        setAdminAddresses((prev) => [...prev, addr])
+                        setNewAdminInput('')
+                      }
+                    }}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {adminAddresses.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {adminAddresses.map((addr) => (
+                      <div
+                        key={addr}
+                        className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-md px-3 py-1.5"
+                      >
+                        <span className="text-xs font-mono text-slate-700 truncate">{addr}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdminAddresses((prev) => prev.filter((a) => a !== addr))
+                          }
+                          className="text-slate-400 hover:text-red-500 ml-2 shrink-0"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

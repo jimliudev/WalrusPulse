@@ -18,6 +18,7 @@ export function buildCreateFormTx(
   title: string,
   description: string,
   schemaBlobId: string,
+  initialAdmins: string[] = [],
 ): Transaction {
   const tx = new Transaction()
   tx.moveCall({
@@ -26,6 +27,7 @@ export function buildCreateFormTx(
       tx.pure('vector<u8>', encodeStr(title)),
       tx.pure('vector<u8>', encodeStr(description)),
       tx.pure('vector<u8>', encodeStr(schemaBlobId)),
+      tx.pure('vector<address>', initialAdmins),
     ],
   })
   return tx
@@ -50,13 +52,39 @@ export function buildSubmitResponseTx(
 }
 /**
  * Build a Transaction that deactivates (closes) a form.
- * Only the form owner can call this.
+ * Only the form owner or a co-admin can call this.
  */
 export function buildDeactivateFormTx(formObjectId: string): Transaction {
   const tx = new Transaction()
   tx.moveCall({
     target: `${PACKAGE_ID}::${MODULE_NAME}::deactivate_form`,
     arguments: [tx.object(formObjectId)],
+  })
+  return tx
+}
+
+/**
+ * Build a Transaction that adds a co-admin to a form.
+ * Only the owner can call this.
+ */
+export function buildAddAdminTx(formObjectId: string, adminAddress: string): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::add_admin`,
+    arguments: [tx.object(formObjectId), tx.pure('address', adminAddress)],
+  })
+  return tx
+}
+
+/**
+ * Build a Transaction that removes a co-admin from a form.
+ * Only the owner can call this.
+ */
+export function buildRemoveAdminTx(formObjectId: string, adminAddress: string): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::remove_admin`,
+    arguments: [tx.object(formObjectId), tx.pure('address', adminAddress)],
   })
   return tx
 }
@@ -125,6 +153,7 @@ export async function fetchFormObject(
     description: string
     schema_blob_id: string
     owner: string
+    admins: { fields: { contents: string[] } } | { contents: string[] }
     response_blob_ids: string[]
     is_active: boolean
     // Balance<SUI> is serialised as a plain string by the Sui RPC
@@ -146,12 +175,20 @@ export async function fetchFormObject(
     (rawRewarded as { contents?: string[] })?.contents ??
     []
 
+  // VecSet<address> for admins — same serialization pattern
+  const rawAdmins = fields.admins
+  const admins: string[] =
+    (rawAdmins as { fields?: { contents?: string[] } })?.fields?.contents ??
+    (rawAdmins as { contents?: string[] })?.contents ??
+    []
+
   return {
     objectId,
     title: fields.title,
     description: fields.description,
     schemaBlobId: fields.schema_blob_id,
     owner: fields.owner,
+    admins,
     responseBlobIds: fields.response_blob_ids || [],
     isActive: fields.is_active,
     rewardPoolBalance,

@@ -52,6 +52,7 @@ export interface SuiFormFields {
   description: string
   schema_blob_id: string
   owner: string
+  admins: { fields: { contents: string[] } } | { contents: string[] }
   response_blob_ids: string[]
   is_active: boolean
   reward_pool: { value: string }
@@ -64,6 +65,7 @@ export interface SuiFormObject {
   description: string
   schemaBlobId: string
   owner: string
+  admins: string[]
   responseBlobIds: string[]
   isActive: boolean
   rewardPoolBalance: bigint
