@@ -10,9 +10,24 @@
 ///
 ///   3. The admin reads `Form.response_blob_ids` on-chain, fetches each blob
 ///      from Walrus, and renders them in the dashboard.
+///
+///   4. The form owner can fund a SUI reward pool and manually send rewards
+///      to deserving respondents. Each address can only be rewarded once per form.
 module walrus_pulse::walrus_pulse {
     use sui::event;
+    use sui::balance::{Self, Balance};
+    use sui::coin::{Self, Coin};
+    use sui::sui::SUI;
+    use sui::vec_set::{Self, VecSet};
     use std::string::{Self, String};
+
+    // ── Error codes ───────────────────────────────────────────────────────────
+
+    const ENotOwner: u64         = 0;
+    const EFormInactive: u64     = 1;
+    const EInsufficientPool: u64 = 2;
+    const EAlreadyRewarded: u64  = 3;
+    const EZeroAmount: u64       = 4;
 
     // ── Structs ──────────────────────────────────────────────────────────────
 
@@ -28,6 +43,10 @@ module walrus_pulse::walrus_pulse {
         /// Ordered list of Walrus blob IDs for submitted responses.
         response_blob_ids: vector<String>,
         is_active: bool,
+        /// SUI reward pool funded by the owner.
+        reward_pool: Balance<SUI>,
+        /// Set of addresses that have already received a reward for this form.
+        rewarded: VecSet<address>,
     }
 
     // ── Events ───────────────────────────────────────────────────────────────
@@ -43,6 +62,19 @@ module walrus_pulse::walrus_pulse {
         form_id: ID,
         response_blob_id: String,
         submitter: address,
+    }
+
+    public struct PoolFunded has copy, drop {
+        form_id: ID,
+        amount: u64,
+        new_balance: u64,
+    }
+
+    public struct RewardSent has copy, drop {
+        form_id: ID,
+        recipient: address,
+        amount: u64,
+        remaining_pool: u64,
     }
 
     // ── Entry functions ───────────────────────────────────────────────────────
@@ -77,6 +109,8 @@ module walrus_pulse::walrus_pulse {
             owner,
             response_blob_ids: vector[],
             is_active: true,
+            reward_pool: balance::zero<SUI>(),
+            rewarded: vec_set::empty<address>(),
         });
     }
 
@@ -86,7 +120,7 @@ module walrus_pulse::walrus_pulse {
         response_blob_id: vector<u8>,
         ctx: &mut TxContext,
     ) {
-        assert!(form.is_active, 0);
+        assert!(form.is_active, EFormInactive);
 
         let response_str = string::utf8(response_blob_id);
         let submitter = ctx.sender();
@@ -102,8 +136,78 @@ module walrus_pulse::walrus_pulse {
 
     /// Deactivate a form so it no longer accepts responses. Only the owner can do this.
     public entry fun deactivate_form(form: &mut Form, ctx: &TxContext) {
-        assert!(form.owner == ctx.sender(), 1);
+        assert!(form.owner == ctx.sender(), ENotOwner);
         form.is_active = false;
+    }
+
+    // ── Reward pool functions ─────────────────────────────────────────────────
+
+    /// Owner deposits SUI into the form's reward pool.
+    public entry fun fund_reward_pool(
+        form: &mut Form,
+        payment: Coin<SUI>,
+        ctx: &TxContext,
+    ) {
+        assert!(form.owner == ctx.sender(), ENotOwner);
+
+        let amount = coin::value(&payment);
+        assert!(amount > 0, EZeroAmount);
+
+        balance::join(&mut form.reward_pool, coin::into_balance(payment));
+
+        event::emit(PoolFunded {
+            form_id: object::uid_to_inner(&form.id),
+            amount,
+            new_balance: balance::value(&form.reward_pool),
+        });
+    }
+
+    /// Owner manually sends a SUI reward to a recipient address.
+    /// Each address can only be rewarded once per form.
+    public entry fun reward_respondent(
+        form: &mut Form,
+        recipient: address,
+        amount: u64,
+        ctx: &mut TxContext,
+    ) {
+        // Security: only form owner can call this
+        assert!(form.owner == ctx.sender(), ENotOwner);
+        // Security: amount must be positive
+        assert!(amount > 0, EZeroAmount);
+        // Security: pool must have enough balance
+        assert!(balance::value(&form.reward_pool) >= amount, EInsufficientPool);
+        // Security: each address can only receive reward once
+        assert!(!vec_set::contains(&form.rewarded, &recipient), EAlreadyRewarded);
+
+        // Mark as rewarded before transfer (checks-effects-interactions)
+        vec_set::insert(&mut form.rewarded, recipient);
+
+        // Split from pool and transfer to recipient
+        let reward_balance = balance::split(&mut form.reward_pool, amount);
+        let reward_coin = coin::from_balance(reward_balance, ctx);
+        transfer::public_transfer(reward_coin, recipient);
+
+        event::emit(RewardSent {
+            form_id: object::uid_to_inner(&form.id),
+            recipient,
+            amount,
+            remaining_pool: balance::value(&form.reward_pool),
+        });
+    }
+
+    /// Owner withdraws remaining SUI from the reward pool (e.g. when closing a form).
+    public entry fun withdraw_reward_pool(
+        form: &mut Form,
+        ctx: &mut TxContext,
+    ) {
+        assert!(form.owner == ctx.sender(), ENotOwner);
+
+        let pool_amount = balance::value(&form.reward_pool);
+        assert!(pool_amount > 0, EInsufficientPool);
+
+        let all_balance = balance::split(&mut form.reward_pool, pool_amount);
+        let coin = coin::from_balance(all_balance, ctx);
+        transfer::public_transfer(coin, form.owner);
     }
 
     // ── Read-only helpers ─────────────────────────────────────────────────────
@@ -114,4 +218,8 @@ module walrus_pulse::walrus_pulse {
     public fun is_active(form: &Form): bool { form.is_active }
     public fun response_count(form: &Form): u64 { form.response_blob_ids.length() }
     public fun response_blob_ids(form: &Form): vector<String> { form.response_blob_ids }
+    public fun reward_pool_balance(form: &Form): u64 { balance::value(&form.reward_pool) }
+    public fun is_rewarded(form: &Form, addr: address): bool {
+        vec_set::contains(&form.rewarded, &addr)
+    }
 }

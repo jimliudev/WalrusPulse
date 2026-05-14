@@ -13,8 +13,8 @@ import {
   CheckSquare,
   Star,
   Link2,
-  FileUp,
   Image,
+  Video,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from './ui/button'
@@ -33,8 +33,8 @@ export const FIELD_TYPES: { type: FieldType; label: string; icon: React.ReactNod
   { type: 'checkbox', label: 'Checkboxes', icon: <CheckSquare className="h-4 w-4" /> },
   { type: 'rating', label: 'Star Rating', icon: <Star className="h-4 w-4" /> },
   { type: 'url', label: 'URL / Link', icon: <Link2 className="h-4 w-4" /> },
-  { type: 'file', label: 'File Upload', icon: <FileUp className="h-4 w-4" /> },
   { type: 'image', label: 'Image Upload', icon: <Image className="h-4 w-4" /> },
+  { type: 'video', label: 'Video Upload', icon: <Video className="h-4 w-4" /> },
 ]
 
 const typeLabels: Record<FieldType, string> = {
@@ -44,8 +44,8 @@ const typeLabels: Record<FieldType, string> = {
   checkbox: 'Checkboxes',
   rating: 'Star Rating',
   url: 'URL',
-  file: 'File Upload',
   image: 'Image Upload',
+  video: 'Video Upload',
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────

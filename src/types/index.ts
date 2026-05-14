@@ -7,8 +7,8 @@ export type FieldType =
   | 'checkbox'
   | 'rating'
   | 'url'
-  | 'file'
   | 'image'
+  | 'video'
 
 export interface FormField {
   id: string
@@ -54,6 +54,8 @@ export interface SuiFormFields {
   owner: string
   response_blob_ids: string[]
   is_active: boolean
+  reward_pool: { value: string }
+  rewarded: { contents: string[] }
 }
 
 export interface SuiFormObject {
@@ -64,6 +66,8 @@ export interface SuiFormObject {
   owner: string
   responseBlobIds: string[]
   isActive: boolean
+  rewardPoolBalance: bigint
+  rewardedAddresses: string[]
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────

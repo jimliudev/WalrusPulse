@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react'
 import {
   Link2,
-  Upload,
   Image as ImageIcon,
-  FileText,
   Check,
   Loader2,
   ExternalLink,
+  Video,
+  Download,
 } from 'lucide-react'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -175,16 +175,16 @@ export default function FieldRenderer({ field, value, onChange, readonly }: Fiel
         </div>
       )
 
-    // ── File upload ───────────────────────────────────────────────────────────
-    case 'file':
+    // ── Image / Video upload ───────────────────────────────────────────────────────────────────────────
     case 'image':
+    case 'video':
       return (
         <WalrusFileUpload
           field={field}
           value={strVal}
           onChange={onChange}
           readonly={readonly}
-          accept={field.type === 'image' ? 'image/*' : undefined}
+          accept={field.type === 'image' ? 'image/*' : 'video/*'}
           commonLabel={commonLabel}
         />
       )
@@ -208,15 +208,20 @@ interface WalrusFileUploadProps {
 function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabel }: WalrusFileUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
-  const [fileName, setFileName] = useState<string>('')
+  const [downloading, setDownloading] = useState(false)
   const isImage = field.type === 'image'
+  const isVideo = field.type === 'video'
+
+  // value format: "blobId|originalFilename.ext"  (legacy: just "blobId")
+  const { blobId, fileName } = parseBlobValue(value)
+  const blobUrl = blobId ? getBlobUrl(blobId) : ''
 
   const handleFile = async (file: File) => {
     setUploading(true)
     try {
-      const blobId = await storeBlob(file)
-      setFileName(file.name)
-      onChange(blobId)
+      const id = await storeBlob(file)
+      // Store blobId + original filename so download has the right extension
+      onChange(`${id}|${file.name}`)
     } catch (err) {
       console.error('Upload failed', err)
     } finally {
@@ -224,27 +229,57 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
     }
   }
 
-  if (readonly && value) {
+  const handleDownload = async () => {
+    if (!blobId) return
+    setDownloading(true)
+    try {
+      const response = await fetch(getBlobUrl(blobId))
+      if (!response.ok) throw new Error(`${response.status}`)
+      const blob = await response.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = fileName || (isVideo ? 'video.mp4' : 'image')
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(objectUrl)
+    } catch (err) {
+      console.error('Download failed', err)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  if (readonly && blobId) {
     return (
-      <div className="space-y-1">
+      <div className="space-y-2">
         {commonLabel}
         {isImage ? (
           <img
-            src={getBlobUrl(value)}
+            src={blobUrl}
             alt="Uploaded"
             className="max-h-48 rounded-lg border border-slate-200 object-contain"
           />
-        ) : (
-          <a
-            href={getBlobUrl(value)}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 text-sm text-teal-600 hover:underline"
-          >
-            <FileText className="h-4 w-4" /> Download file
-          </a>
-        )}
-        <p className="text-xs text-slate-400 break-all">Blob ID: {value}</p>
+        ) : isVideo ? (
+          <div className="space-y-2">
+            <video
+              src={blobUrl}
+              controls
+              className="w-full max-h-64 rounded-lg border border-slate-200 bg-black"
+            />
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="inline-flex items-center gap-1.5 text-xs text-teal-600 hover:underline disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {downloading ? 'Downloading…' : `Download ${fileName || 'video'}`}
+            </button>
+          </div>
+        ) : null}
+        <p className="text-xs text-slate-400 break-all">Blob ID: {blobId}</p>
       </div>
     )
   }
@@ -256,7 +291,7 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
         className={cn(
           'border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors',
           uploading ? 'border-teal-300 bg-teal-50' : 'border-slate-200 hover:border-teal-300 hover:bg-slate-50',
-          value && 'border-green-300 bg-green-50',
+          blobId && 'border-green-300 bg-green-50',
         )}
         onClick={() => !uploading && inputRef.current?.click()}
       >
@@ -276,19 +311,19 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
             <Loader2 className="h-8 w-8 text-teal-500 animate-spin" />
             <p className="text-sm text-teal-600">Uploading to Walrus…</p>
           </div>
-        ) : value ? (
+        ) : blobId ? (
           <div className="flex flex-col items-center gap-2">
             {isImage ? (
               <img
-                src={getBlobUrl(value)}
+                src={blobUrl}
                 alt="Preview"
                 className="max-h-32 rounded-lg object-contain mx-auto"
               />
             ) : (
-              <FileText className="h-8 w-8 text-green-500" />
+              <Video className="h-8 w-8 text-green-500" />
             )}
             <p className="text-sm text-green-700 font-medium">{fileName || 'File uploaded'}</p>
-            <p className="text-xs text-slate-400 break-all">Blob: {value}</p>
+            <p className="text-xs text-slate-400 break-all">Blob: {blobId}</p>
             <button
               type="button"
               className="text-xs text-teal-600 hover:underline"
@@ -302,10 +337,10 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
             {isImage ? (
               <ImageIcon className="h-8 w-8 text-slate-400" />
             ) : (
-              <Upload className="h-8 w-8 text-slate-400" />
+              <Video className="h-8 w-8 text-slate-400" />
             )}
             <p className="text-sm text-slate-600">
-              Click to upload {isImage ? 'image' : 'file'}
+              Click to upload {isImage ? 'image' : 'video'}
             </p>
             <p className="text-xs text-slate-400">Stored permanently on Walrus</p>
           </div>
@@ -313,4 +348,14 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
       </div>
     </div>
   )
+}
+
+// ─── Parse stored blob value ──────────────────────────────────────────────────
+
+// Value format: "blobId|originalFilename.ext"
+// Legacy format (no filename stored): just "blobId"
+function parseBlobValue(value: string): { blobId: string; fileName: string } {
+  const idx = value.indexOf('|')
+  if (idx === -1) return { blobId: value, fileName: '' }
+  return { blobId: value.slice(0, idx), fileName: value.slice(idx + 1) }
 }

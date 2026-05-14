@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit'
-import { CheckCircle2, Waves, ChevronLeft, Send } from 'lucide-react'
+import { CheckCircle2, Waves, ChevronLeft, Send, LockKeyhole } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -189,6 +189,40 @@ export default function FormPage() {
   }
 
   if (!schema || !formObj) return null
+
+  // ── Closed form screen ────────────────────────────────────────────────────
+
+  if (!formObj.isActive) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <div className="max-w-md w-full text-center space-y-6">
+          <div className="flex justify-center">
+            <div className="h-20 w-20 rounded-full bg-slate-100 flex items-center justify-center">
+              <LockKeyhole className="h-10 w-10 text-slate-400" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-bold text-slate-800">This form is closed</h1>
+            <p className="text-slate-500">
+              The form owner has stopped accepting new responses.
+            </p>
+            <div className="bg-slate-100 rounded-lg p-3 text-left mt-4">
+              <p className="text-sm font-medium text-slate-700">{schema.title}</p>
+              {schema.description && (
+                <p className="text-xs text-slate-500 mt-1">{schema.description}</p>
+              )}
+            </div>
+          </div>
+          <Link to="/">
+            <Button variant="outline" className="gap-2">
+              <Waves className="h-4 w-4" />
+              Back to WalrusPulse
+            </Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
 
   // ── Form ───────────────────────────────────────────────────────────────────
 

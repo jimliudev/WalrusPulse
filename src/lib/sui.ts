@@ -48,6 +48,57 @@ export function buildSubmitResponseTx(
   })
   return tx
 }
+/**
+ * Build a Transaction that deactivates (closes) a form.
+ * Only the form owner can call this.
+ */
+export function buildDeactivateFormTx(formObjectId: string): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::deactivate_form`,
+    arguments: [tx.object(formObjectId)],
+  })
+  return tx
+}
+// ─── Reward pool transactions ────────────────────────────────────────────────
+
+/**
+ * Build a Transaction that funds the form's reward pool with SUI.
+ * amountMist is in MIST (1 SUI = 1_000_000_000 MIST).
+ */
+export function buildFundRewardPoolTx(
+  formObjectId: string,
+  amountMist: bigint,
+): Transaction {
+  const tx = new Transaction()
+  const [coin] = tx.splitCoins(tx.gas, [tx.pure('u64', amountMist)])
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::fund_reward_pool`,
+    arguments: [tx.object(formObjectId), coin],
+  })
+  return tx
+}
+
+/**
+ * Build a Transaction that sends a SUI reward to a recipient.
+ * amountMist is in MIST (1 SUI = 1_000_000_000 MIST).
+ */
+export function buildRewardRespondentTx(
+  formObjectId: string,
+  recipient: string,
+  amountMist: bigint,
+): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::reward_respondent`,
+    arguments: [
+      tx.object(formObjectId),
+      tx.pure('address', recipient),
+      tx.pure('u64', amountMist),
+    ],
+  })
+  return tx
+}
 
 // ─── Read on-chain data ───────────────────────────────────────────────────────
 
@@ -55,7 +106,8 @@ export function buildSubmitResponseTx(
  * Fetch a single Form object from Sui and normalise it.
  */
 export async function fetchFormObject(
-  client: SuiClient,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
   objectId: string,
 ): Promise<SuiFormObject> {
   const result = await client.getObject({
@@ -75,7 +127,24 @@ export async function fetchFormObject(
     owner: string
     response_blob_ids: string[]
     is_active: boolean
+    // Balance<SUI> is serialised as a plain string by the Sui RPC
+    reward_pool: string | { value: string }
+    // VecSet is serialised as { fields: { contents: address[] } }
+    rewarded: { fields: { contents: string[] } } | { contents: string[] }
   }
+
+  // Balance<SUI>: handle both plain-string and nested-object forms
+  const rawPool = fields.reward_pool
+  const rewardPoolBalance = BigInt(
+    typeof rawPool === 'string' ? rawPool : (rawPool?.value ?? '0'),
+  )
+
+  // VecSet<address>: handle both { fields: { contents } } and { contents }
+  const rawRewarded = fields.rewarded
+  const rewardedAddresses: string[] =
+    (rawRewarded as { fields?: { contents?: string[] } })?.fields?.contents ??
+    (rawRewarded as { contents?: string[] })?.contents ??
+    []
 
   return {
     objectId,
@@ -85,6 +154,8 @@ export async function fetchFormObject(
     owner: fields.owner,
     responseBlobIds: fields.response_blob_ids || [],
     isActive: fields.is_active,
+    rewardPoolBalance,
+    rewardedAddresses,
   }
 }
 
@@ -102,7 +173,8 @@ export interface FormCreatedEvent {
  * belonging to the given owner address.
  */
 export async function fetchFormsCreatedBy(
-  client: SuiClient,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
   ownerAddress: string,
 ): Promise<SuiFormObject[]> {
   if (!PACKAGE_ID) return []
@@ -114,13 +186,13 @@ export async function fetchFormsCreatedBy(
     limit: 200,
   })
 
-  const myEvents = events.data.filter((e) => {
+  const myEvents = events.data.filter((e: { parsedJson: unknown }) => {
     const parsed = e.parsedJson as FormCreatedEvent | undefined
     return parsed?.owner?.toLowerCase() === ownerAddress.toLowerCase()
   })
 
   const forms = await Promise.all(
-    myEvents.map(async (e) => {
+    myEvents.map(async (e: { parsedJson: unknown }) => {
       const parsed = e.parsedJson as FormCreatedEvent
       try {
         return await fetchFormObject(client, parsed.form_id)

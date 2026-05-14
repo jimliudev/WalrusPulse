@@ -21,7 +21,16 @@ export async function storeBlob(data: object | string | Blob | File): Promise<st
   const response = await fetch(url, {
     method: 'PUT',
     body,
-    headers: { 'Content-Type': 'application/octet-stream' },
+    // Preserve the original MIME type for File/Blob so the aggregator
+    // returns the correct Content-Type on download (e.g. video/mp4).
+    headers: {
+      'Content-Type':
+        data instanceof File
+          ? data.type || 'application/octet-stream'
+          : data instanceof Blob
+          ? data.type || 'application/octet-stream'
+          : 'application/octet-stream',
+    },
   })
 
   if (!response.ok) {
@@ -79,4 +88,45 @@ export async function readBlob<T = unknown>(blobId: string): Promise<T> {
  */
 export function getBlobUrl(blobId: string): string {
   return `${WALRUS_AGGREGATOR}/v1/blobs/${blobId}`
+}
+
+/**
+ * Fetch a blob and trigger a browser download with the correct file extension
+ * derived from the Content-Type header.
+ */
+export async function downloadBlob(blobId: string, fallbackName = 'download'): Promise<void> {
+  const url = getBlobUrl(blobId)
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`)
+
+  const contentType = response.headers.get('Content-Type') || ''
+  const ext = mimeToExt(contentType)
+  const filename = ext ? `${fallbackName}.${ext}` : fallbackName
+
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(objectUrl)
+}
+
+function mimeToExt(mime: string): string {
+  const map: Record<string, string> = {
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/ogg': 'ogv',
+    'video/quicktime': 'mov',
+    'video/x-msvideo': 'avi',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+  }
+  // Match e.g. "video/mp4; codecs=..." → "video/mp4"
+  const base = mime.split(';')[0].trim()
+  return map[base] ?? ''
 }

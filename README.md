@@ -70,6 +70,45 @@ npm run dev
 
 ---
 
+### 5. Create form refer data.
+
+```json
+{
+  "formTitle": "Walrus Developer Experience & Ecosystem Feedback",
+  "description": "Help us improve the Walrus protocol and developer tools by sharing your integration experience.",
+  "fields": [
+    {
+      "id": "q1",
+      "type": "star",
+      "label": "Overall Developer Experience (DX)",
+      "description": "How smooth was your journey from setup to deployment?",
+      "required": true
+    },
+    {
+      "id": "q2",
+      "type": "text",
+      "label": "Technical Challenges",
+      "description": "Please describe any bottlenecks you encountered with the SDK or Walrus Sites configuration.",
+      "required": true
+    },
+    {
+      "id": "q3",
+      "type": "video",
+      "label": "Product Demo / Bug Report",
+      "description": "Upload a short video showcasing your product or a specific issue you found.",
+      "required": false
+    },
+    {
+      "id": "q4",
+      "type": "url",
+      "label": "Project Repository",
+      "description": "Provide a link to your public GitHub repository for review.",
+      "required": true
+    }
+  ]
+}
+```
+
 ## How it works
 
 ```
