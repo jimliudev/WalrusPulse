@@ -131,7 +131,7 @@ export default function BuilderPage() {
       // 2. Create Form object on Sui
       toast({ type: 'info', title: 'Creating form on Sui…' })
       const tx = buildCreateFormTx(schema.title, schema.description, schemaBlobId)
-      const result = await signAndExecute({ transaction: tx })
+      const result = await signAndExecute({ transaction: tx as never })
 
       // 3. Extract the created Form object ID from effects
       const created = (result as { objectChanges?: { type: string; objectId: string; objectType: string }[] })

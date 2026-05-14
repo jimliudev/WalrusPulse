@@ -102,7 +102,7 @@ export default function FormPage() {
       // 2. Record on Sui
       toast({ type: 'info', title: 'Recording on-chain…' })
       const tx = buildSubmitResponseTx(formObjectId!, blobId)
-      await signAndExecute({ transaction: tx })
+      await signAndExecute({ transaction: tx as never })
 
       setSubmitted(true)
       toast({ type: 'success', title: 'Response submitted!' })
