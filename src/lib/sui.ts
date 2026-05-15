@@ -88,6 +88,19 @@ export function buildRemoveAdminTx(formObjectId: string, adminAddress: string): 
   })
   return tx
 }
+
+/**
+ * Build a Transaction that transfers form ownership to a new address.
+ * Only the current owner can call this.
+ */
+export function buildTransferOwnershipTx(formObjectId: string, newOwner: string): Transaction {
+  const tx = new Transaction()
+  tx.moveCall({
+    target: `${PACKAGE_ID}::${MODULE_NAME}::transfer_ownership`,
+    arguments: [tx.object(formObjectId), tx.pure('address', newOwner)],
+  })
+  return tx
+}
 // ─── Reward pool transactions ────────────────────────────────────────────────
 
 /**
@@ -205,9 +218,19 @@ export interface FormCreatedEvent {
   owner: string
 }
 
+interface OwnershipTransferredEvent {
+  form_id: string
+  old_owner: string
+  new_owner: string
+}
+
 /**
- * Query the FormCreated events emitted by this package and return those
- * belonging to the given owner address.
+ * Query forms currently owned by `ownerAddress`.
+ * Accounts for ownership transfers:
+ *  - Originally created by this address (FormCreated events)
+ *  - Received via transfer (OwnershipTransferred.new_owner == address)
+ *  - Minus those transferred away (OwnershipTransferred.old_owner == address)
+ * Final check uses the on-chain Form.owner field to confirm.
  */
 export async function fetchFormsCreatedBy(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -216,23 +239,128 @@ export async function fetchFormsCreatedBy(
 ): Promise<SuiFormObject[]> {
   if (!PACKAGE_ID) return []
 
-  const events = await client.queryEvents({
-    query: {
-      MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::FormCreated`,
-    },
-    limit: 200,
-  })
+  const lower = ownerAddress.toLowerCase()
 
-  const myEvents = events.data.filter((e: { parsedJson: unknown }) => {
-    const parsed = e.parsedJson as FormCreatedEvent | undefined
-    return parsed?.owner?.toLowerCase() === ownerAddress.toLowerCase()
-  })
+  const [createdEvents, transferEvents] = await Promise.all([
+    client.queryEvents({
+      query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::FormCreated` },
+      limit: 500,
+    }),
+    client.queryEvents({
+      query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::OwnershipTransferred` },
+      limit: 500,
+    }),
+  ])
+
+  // Form IDs originally created by this address
+  const createdFormIds = new Set<string>(
+    (createdEvents.data as { parsedJson: unknown }[])
+      .map((e) => e.parsedJson as FormCreatedEvent)
+      .filter((p) => p?.owner?.toLowerCase() === lower)
+      .map((p) => p.form_id),
+  )
+
+  // Form IDs transferred TO this address
+  const receivedFormIds = new Set<string>(
+    (transferEvents.data as { parsedJson: unknown }[])
+      .map((e) => e.parsedJson as OwnershipTransferredEvent)
+      .filter((p) => p?.new_owner?.toLowerCase() === lower)
+      .map((p) => p.form_id),
+  )
+
+  // Form IDs transferred AWAY from this address
+  const transferredAwayFormIds = new Set<string>(
+    (transferEvents.data as { parsedJson: unknown }[])
+      .map((e) => e.parsedJson as OwnershipTransferredEvent)
+      .filter((p) => p?.old_owner?.toLowerCase() === lower)
+      .map((p) => p.form_id),
+  )
+
+  // Candidate form IDs: (created + received) minus transferred away
+  const candidateIds = new Set([...createdFormIds, ...receivedFormIds])
+  transferredAwayFormIds.forEach((id) => candidateIds.delete(id))
 
   const forms = await Promise.all(
-    myEvents.map(async (e: { parsedJson: unknown }) => {
-      const parsed = e.parsedJson as FormCreatedEvent
+    [...candidateIds].map(async (formId) => {
       try {
-        return await fetchFormObject(client, parsed.form_id)
+        const form = await fetchFormObject(client, formId)
+        // Final on-chain confirmation: must still be the current owner
+        if (form.owner.toLowerCase() === lower) return form
+        return null
+      } catch {
+        return null
+      }
+    }),
+  )
+
+  return forms.filter((f): f is SuiFormObject => f !== null)
+}
+
+// ─── Query forms where address is a co-admin ─────────────────────────────────
+
+interface AdminAddedEvent {
+  form_id: string
+  admin: string
+  added_by: string
+}
+
+interface AdminRemovedEvent {
+  form_id: string
+  admin: string
+  removed_by: string
+}
+
+/**
+ * Find all forms where `adminAddress` was added as a co-admin.
+ * Subtracts forms where they were subsequently removed.
+ * Returns fetched SuiFormObjects (only those where they are still listed as admin).
+ */
+export async function fetchFormsWhereAdmin(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  adminAddress: string,
+): Promise<SuiFormObject[]> {
+  if (!PACKAGE_ID) return []
+
+  const lower = adminAddress.toLowerCase()
+
+  const [addedEvents, removedEvents] = await Promise.all([
+    client.queryEvents({
+      query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::AdminAdded` },
+      limit: 500,
+    }),
+    client.queryEvents({
+      query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::AdminRemoved` },
+      limit: 500,
+    }),
+  ])
+
+  // form IDs where this address was added
+  const addedFormIds = new Set<string>(
+    (addedEvents.data as { parsedJson: unknown }[])
+      .map((e) => e.parsedJson as AdminAddedEvent)
+      .filter((p) => p?.admin?.toLowerCase() === lower)
+      .map((p) => p.form_id),
+  )
+
+  // form IDs where this address was later removed
+  const removedFormIds = new Set<string>(
+    (removedEvents.data as { parsedJson: unknown }[])
+      .map((e) => e.parsedJson as AdminRemovedEvent)
+      .filter((p) => p?.admin?.toLowerCase() === lower)
+      .map((p) => p.form_id),
+  )
+
+  // still-active admin assignments
+  const activeFormIds = [...addedFormIds].filter((id) => !removedFormIds.has(id))
+
+  const forms = await Promise.all(
+    activeFormIds.map(async (formId) => {
+      try {
+        const form = await fetchFormObject(client, formId)
+        // Double-check on-chain admins list (handles edge cases)
+        if (form.admins.some((a) => a.toLowerCase() === lower)) return form
+        return null
       } catch {
         return null
       }

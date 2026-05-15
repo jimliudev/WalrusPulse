@@ -24,6 +24,7 @@ import {
   UserPlus,
   UserMinus,
   X,
+  ArrowRightLeft,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -35,7 +36,7 @@ import FieldRenderer from '@/components/FieldRenderer'
 import { useToast } from '@/components/ui/toast'
 
 import { readBlob } from '@/lib/walrus'
-import { fetchFormsCreatedBy, buildAddAdminTx, buildRemoveAdminTx } from '@/lib/sui'
+import { fetchFormsCreatedBy, fetchFormsWhereAdmin, buildAddAdminTx, buildRemoveAdminTx, buildTransferOwnershipTx } from '@/lib/sui'
 import { buildCSV, downloadCSV } from '@/lib/csv'
 import { MODULE_NAME, PACKAGE_ID } from '@/config'
 import { Transaction } from '@mysten/sui/transactions'
@@ -85,7 +86,19 @@ export default function AdminPage() {
     refetch: refetchForms,
   } = useQuery<SuiFormObject[]>({
     queryKey: ['admin-forms', account?.address],
-    queryFn: () => fetchFormsCreatedBy(suiClient, account!.address),
+    queryFn: async () => {
+      const [owned, asAdmin] = await Promise.all([
+        fetchFormsCreatedBy(suiClient, account!.address),
+        fetchFormsWhereAdmin(suiClient, account!.address),
+      ])
+      // Merge, deduplicate by objectId
+      const seen = new Set<string>()
+      return [...owned, ...asAdmin].filter((f) => {
+        if (seen.has(f.objectId)) return false
+        seen.add(f.objectId)
+        return true
+      })
+    },
     enabled: !!account && !!PACKAGE_ID,
   })
 
@@ -193,6 +206,11 @@ export default function AdminPage() {
                     <Badge variant="success" className="text-xs">Active</Badge>
                   ) : (
                     <Badge variant="secondary" className="text-xs">Closed</Badge>
+                  )}
+                  {form.owner.toLowerCase() !== account.address.toLowerCase() && (
+                    <Badge variant="outline" className="text-xs text-blue-600 border-blue-200">
+                      Co-admin
+                    </Badge>
                   )}
                 </div>
               </button>
@@ -623,6 +641,8 @@ function AdminsPanel({
   const [newAdminInput, setNewAdminInput] = useState('')
   const [adding, setAdding] = useState(false)
   const [removingAddr, setRemovingAddr] = useState<string | null>(null)
+  const [transferInput, setTransferInput] = useState('')
+  const [transferring, setTransferring] = useState(false)
 
   const isOwner = account?.address?.toLowerCase() === form.owner.toLowerCase()
 
@@ -658,6 +678,28 @@ function AdminsPanel({
       toast({ type: 'error', title: 'Failed to remove admin', description: String(e) })
     } finally {
       setRemovingAddr(null)
+    }
+  }
+
+  const handleTransfer = async () => {
+    const addr = transferInput.trim()
+    if (!addr) return
+    if (addr.toLowerCase() === form.owner.toLowerCase()) {
+      toast({ type: 'warning', title: 'New owner cannot be the same as current owner' })
+      return
+    }
+    if (!confirm(`Transfer ownership to ${addr}?\n\nYou will lose owner privileges immediately.`)) return
+    setTransferring(true)
+    try {
+      const tx = buildTransferOwnershipTx(form.objectId, addr)
+      await signAndExecute({ transaction: tx as never })
+      toast({ type: 'success', title: 'Ownership transferred', description: addr })
+      setTransferInput('')
+      onSuccess()
+    } catch (e) {
+      toast({ type: 'error', title: 'Transfer failed', description: String(e) })
+    } finally {
+      setTransferring(false)
     }
   }
 
@@ -737,6 +779,43 @@ function AdminsPanel({
           <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
             <X className="h-3 w-3" /> Only the form owner can manage admins.
           </p>
+        )}
+
+        {/* Transfer ownership — owner only */}
+        {isOwner && (
+          <>
+            <Separator className="my-3" />
+            <div>
+              <p className="text-xs font-medium text-slate-600 mb-1 flex items-center gap-1">
+                <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer Ownership
+              </p>
+              <p className="text-xs text-slate-400 mb-2">
+                Permanently transfer full owner rights to another address. You will lose owner access immediately.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={transferInput}
+                  onChange={(e) => setTransferInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); handleTransfer() }
+                  }}
+                  placeholder="0x… new owner address"
+                  className="flex-1 rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-300"
+                />
+                <Button
+                  size="sm"
+                  onClick={handleTransfer}
+                  disabled={transferring || !transferInput.trim()}
+                  variant="outline"
+                  className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50 shrink-0"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  {transferring ? 'Transferring…' : 'Transfer'}
+                </Button>
+              </div>
+            </div>
+          </>
         )}
       </CardHeader>
     </Card>

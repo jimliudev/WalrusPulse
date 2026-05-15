@@ -84,6 +84,24 @@ module walrus_pulse::walrus_pulse {
         remaining_pool: u64,
     }
 
+    public struct AdminAdded has copy, drop {
+        form_id: ID,
+        admin: address,
+        added_by: address,
+    }
+
+    public struct AdminRemoved has copy, drop {
+        form_id: ID,
+        admin: address,
+        removed_by: address,
+    }
+
+    public struct OwnershipTransferred has copy, drop {
+        form_id: ID,
+        old_owner: address,
+        new_owner: address,
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// Returns true if the sender is the form owner or a co-admin.
@@ -118,6 +136,11 @@ module walrus_pulse::walrus_pulse {
             let admin = initial_admins[i];
             if (admin != owner && !vec_set::contains(&admins, &admin)) {
                 vec_set::insert(&mut admins, admin);
+                event::emit(AdminAdded {
+                    form_id,
+                    admin,
+                    added_by: owner,
+                });
             };
             i = i + 1;
         };
@@ -177,6 +200,11 @@ module walrus_pulse::walrus_pulse {
         assert!(form.owner == ctx.sender(), ENotOwner);
         if (!vec_set::contains(&form.admins, &new_admin)) {
             vec_set::insert(&mut form.admins, new_admin);
+            event::emit(AdminAdded {
+                form_id: object::uid_to_inner(&form.id),
+                admin: new_admin,
+                added_by: ctx.sender(),
+            });
         };
     }
 
@@ -185,18 +213,44 @@ module walrus_pulse::walrus_pulse {
         assert!(form.owner == ctx.sender(), ENotOwner);
         if (vec_set::contains(&form.admins, &admin)) {
             vec_set::remove(&mut form.admins, &admin);
+            event::emit(AdminRemoved {
+                form_id: object::uid_to_inner(&form.id),
+                admin,
+                removed_by: ctx.sender(),
+            });
         };
+    }
+
+    /// Transfer form ownership to a new address. Only the current owner can call this.
+    /// The old owner is automatically removed from everything; the new owner inherits full control.
+    public entry fun transfer_ownership(form: &mut Form, new_owner: address, ctx: &TxContext) {
+        assert!(form.owner == ctx.sender(), ENotOwner);
+        assert!(new_owner != form.owner, ENotOwner);
+
+        // Remove new_owner from admins if they were a co-admin
+        if (vec_set::contains(&form.admins, &new_owner)) {
+            vec_set::remove(&mut form.admins, &new_owner);
+        };
+
+        let old_owner = form.owner;
+        form.owner = new_owner;
+
+        event::emit(OwnershipTransferred {
+            form_id: object::uid_to_inner(&form.id),
+            old_owner,
+            new_owner,
+        });
     }
 
     // ── Reward pool functions ─────────────────────────────────────────────────
 
-    /// Owner or co-admin deposits SUI into the form's reward pool.
+    /// Owner-only: deposits SUI into the form's reward pool.
     public entry fun fund_reward_pool(
         form: &mut Form,
         payment: Coin<SUI>,
         ctx: &TxContext,
     ) {
-        assert!(is_authorized(form, ctx), ENotAuthorized);
+        assert!(form.owner == ctx.sender(), ENotOwner);
 
         let amount = coin::value(&payment);
         assert!(amount > 0, EZeroAmount);
@@ -210,7 +264,7 @@ module walrus_pulse::walrus_pulse {
         });
     }
 
-    /// Owner or co-admin manually sends a SUI reward to a recipient address.
+    /// Owner-only: manually sends a SUI reward to a recipient address.
     /// Each address can only be rewarded once per form.
     public entry fun reward_respondent(
         form: &mut Form,
@@ -218,7 +272,7 @@ module walrus_pulse::walrus_pulse {
         amount: u64,
         ctx: &mut TxContext,
     ) {
-        assert!(is_authorized(form, ctx), ENotAuthorized);
+        assert!(form.owner == ctx.sender(), ENotOwner);
         assert!(amount > 0, EZeroAmount);
         assert!(balance::value(&form.reward_pool) >= amount, EInsufficientPool);
         assert!(!vec_set::contains(&form.rewarded, &recipient), EAlreadyRewarded);
