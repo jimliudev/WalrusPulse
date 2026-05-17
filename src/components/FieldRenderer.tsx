@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
+import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import {
   Link2,
   Image as ImageIcon,
@@ -7,6 +8,7 @@ import {
   ExternalLink,
   Video,
   Download,
+  X,
 } from 'lucide-react'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -15,6 +17,7 @@ import { Badge } from './ui/badge'
 import StarRating from './StarRating'
 import { storeBlob, getBlobUrl } from '@/lib/walrus'
 import { cn } from '@/lib/utils'
+import { LIMITS } from '@/lib/utils'
 import type { AnswerValue, FormField } from '@/types'
 
 interface FieldRendererProps {
@@ -49,10 +52,16 @@ export default function FieldRenderer({ field, value, onChange, readonly }: Fiel
           {commonLabel}
           <Input
             value={strVal}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => onChange(e.target.value.slice(0, LIMITS.answerText))}
             placeholder={field.placeholder ?? 'Your answer…'}
             disabled={readonly}
+            maxLength={LIMITS.answerText}
           />
+          {!readonly && (
+            <p className={`text-right text-xs ${strVal.length >= LIMITS.answerText ? 'text-red-500' : 'text-slate-400'}`}>
+              {strVal.length}/{LIMITS.answerText}
+            </p>
+          )}
         </div>
       )
 
@@ -63,16 +72,36 @@ export default function FieldRenderer({ field, value, onChange, readonly }: Fiel
           {commonLabel}
           <Textarea
             value={strVal}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => onChange(e.target.value.slice(0, LIMITS.answerTextarea))}
             placeholder={field.placeholder ?? 'Your answer…'}
             disabled={readonly}
             rows={4}
+            maxLength={LIMITS.answerTextarea}
           />
+          {!readonly && (
+            <p className={`text-right text-xs ${strVal.length >= LIMITS.answerTextarea ? 'text-red-500' : 'text-slate-400'}`}>
+              {strVal.length}/{LIMITS.answerTextarea}
+            </p>
+          )}
         </div>
       )
 
     // ── URL ───────────────────────────────────────────────────────────────────
-    case 'url':
+    case 'url': {
+      let urlError = ''
+      let safeHref = ''
+      if (strVal) {
+        try {
+          const parsed = new URL(strVal)
+          if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+            safeHref = strVal
+          } else {
+            urlError = 'URL must start with http:// or https://'
+          }
+        } catch {
+          urlError = 'Please enter a valid URL'
+        }
+      }
       return (
         <div className="space-y-1">
           {commonLabel}
@@ -81,17 +110,21 @@ export default function FieldRenderer({ field, value, onChange, readonly }: Fiel
             <Input
               type="url"
               value={strVal}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => onChange(e.target.value.slice(0, LIMITS.answerUrl))}
               placeholder={field.placeholder ?? 'https://…'}
               disabled={readonly}
-              className="pl-9"
+              className={cn('pl-9', urlError && strVal ? 'border-red-400 focus-visible:ring-red-400' : '')}
+              maxLength={LIMITS.answerUrl}
             />
           </div>
-          {strVal && readonly && (
+          {urlError && strVal && !readonly && (
+            <p className="text-xs text-red-500">{urlError}</p>
+          )}
+          {safeHref && readonly && (
             <a
-              href={strVal}
+              href={safeHref}
               target="_blank"
-              rel="noreferrer"
+              rel="noreferrer noopener"
               className="inline-flex items-center gap-1 text-xs text-teal-600 hover:underline mt-1"
             >
               <ExternalLink className="h-3 w-3" /> Open link
@@ -99,6 +132,7 @@ export default function FieldRenderer({ field, value, onChange, readonly }: Fiel
           )}
         </div>
       )
+    }
 
     // ── Dropdown ──────────────────────────────────────────────────────────────
     case 'dropdown':
@@ -206,24 +240,54 @@ interface WalrusFileUploadProps {
 }
 
 function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabel }: WalrusFileUploadProps) {
+  const account = useCurrentAccount()
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
   const isImage = field.type === 'image'
   const isVideo = field.type === 'video'
+
+  useEffect(() => {
+    if (!lightboxOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightboxOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightboxOpen])
 
   // value format: "blobId|originalFilename.ext"  (legacy: just "blobId")
   const { blobId, fileName } = parseBlobValue(value)
   const blobUrl = blobId ? getBlobUrl(blobId) : ''
 
   const handleFile = async (file: File) => {
+    setUploadError(null)
+
+    // Wallet must be connected (required for SDK mode; good guard regardless)
+    if (!account) {
+      setUploadError('Please connect your wallet before uploading.')
+      return
+    }
+
+    // File size guard
+    const limitMb = isVideo ? LIMITS.uploadVideoMb : LIMITS.uploadImageMb
+    if (file.size > limitMb * 1024 * 1024) {
+      setUploadError(`File exceeds the ${limitMb} MB limit.`)
+      return
+    }
+
     setUploading(true)
     try {
-      const id = await storeBlob(file)
+      const id = await storeBlob(file, {
+        signAndExecuteTransaction: signAndExecute as (args: { transaction: unknown }) => Promise<{ digest: string }>,
+        currentAddress: account.address,
+      })
       // Store blobId + original filename so download has the right extension
       onChange(`${id}|${file.name}`)
     } catch (err) {
       console.error('Upload failed', err)
+      setUploadError(err instanceof Error ? err.message : 'Upload failed. Please try again.')
     } finally {
       setUploading(false)
     }
@@ -256,11 +320,35 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
       <div className="space-y-2">
         {commonLabel}
         {isImage ? (
-          <img
-            src={blobUrl}
-            alt="Uploaded"
-            className="max-h-48 rounded-lg border border-slate-200 object-contain"
-          />
+          <>
+            <img
+              src={blobUrl}
+              alt="Uploaded"
+              onClick={() => setLightboxOpen(true)}
+              className="max-h-48 rounded-lg border border-slate-200 object-contain cursor-zoom-in hover:opacity-90 transition-opacity"
+            />
+            {lightboxOpen && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+                onClick={() => setLightboxOpen(false)}
+              >
+                <img
+                  src={blobUrl}
+                  alt="Fullscreen"
+                  onClick={(e) => e.stopPropagation()}
+                  className="max-w-[90vw] max-h-[90vh] rounded-xl object-contain shadow-2xl"
+                />
+                <button
+                  type="button"
+                  onClick={() => setLightboxOpen(false)}
+                  className="absolute top-4 right-4 text-white bg-black/50 hover:bg-black/80 rounded-full p-1.5 transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            )}
+          </>
         ) : isVideo ? (
           <div className="space-y-2">
             <video
@@ -346,6 +434,9 @@ function WalrusFileUpload({ field, value, onChange, readonly, accept, commonLabe
           </div>
         )}
       </div>
+      {uploadError && (
+        <p className="text-xs text-red-500 mt-1">{uploadError}</p>
+      )}
     </div>
   )
 }

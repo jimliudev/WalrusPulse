@@ -30,9 +30,10 @@ import LoadingSpinner from '@/components/LoadingSpinner'
 import { useToast } from '@/components/ui/toast'
 
 import { storeBlob } from '@/lib/walrus'
-import { buildCreateFormTx } from '@/lib/sui'
+import { buildCreateFormTx, addCreateFormCommands } from '@/lib/sui'
 import { generateId } from '@/lib/utils'
-import { PACKAGE_ID } from '@/config'
+import { LIMITS } from '@/lib/utils'
+import { PACKAGE_ID, STORAGE_MODE } from '@/config'
 import type { FieldType, FormField, FormSchema } from '@/types'
 
 // ─── Builder Page ─────────────────────────────────────────────────────────────
@@ -128,21 +129,29 @@ export default function BuilderPage() {
         ownerAddress: account.address,
       }
       toast({ type: 'info', title: 'Uploading schema to Walrus…' })
-      const schemaBlobId = await storeBlob(schema)
+      let formObjectId: string | undefined
 
-      // 2. Create Form object on Sui
-      toast({ type: 'info', title: 'Creating form on Sui…' })
-      const tx = buildCreateFormTx(schema.title, schema.description, schemaBlobId, adminAddresses)
-      const result = await signAndExecute({ transaction: tx as never })
+      const schemaBlobId = await storeBlob(schema, {
+        signAndExecuteTransaction: signAndExecute as (args: { transaction: unknown }) => Promise<{ digest: string; objectChanges?: unknown[] }>,
+        currentAddress: account.address,
+        // SDK mode: inject create_form into the Walrus register PTB (saves 1 signature)
+        augmentRegisterTx: (tx, blobId) => {
+          addCreateFormCommands(tx, schema.title, schema.description, blobId, adminAddresses)
+        },
+        onRegisterResult: (result) => {
+          const changes = (result as { objectChanges?: { type: string; objectId: string; objectType: string }[] }).objectChanges
+          formObjectId = changes?.find(c => c.type === 'created' && c.objectType?.includes('::walrus_pulse::Form'))?.objectId
+        },
+      })
 
-      // 3. Extract the created Form object ID from effects
-      const created = (result as { objectChanges?: { type: string; objectId: string; objectType: string }[] })
-        .objectChanges
-        ?.find(
-          (c) => c.type === 'created' && c.objectType?.includes('::walrus_pulse::Form'),
-        )
-
-      const formObjectId = created?.objectId
+      // Publisher mode: augmentRegisterTx was ignored above — run create_form separately
+      if (STORAGE_MODE !== 'sdk') {
+        toast({ type: 'info', title: 'Creating form on Sui…' })
+        const tx = buildCreateFormTx(schema.title, schema.description, schemaBlobId, adminAddresses)
+        const result = await signAndExecute({ transaction: tx as never })
+        const changes = (result as { objectChanges?: { type: string; objectId: string; objectType: string }[] }).objectChanges
+        formObjectId = changes?.find(c => c.type === 'created' && c.objectType?.includes('::walrus_pulse::Form'))?.objectId
+      }
 
       toast({
         type: 'success',
@@ -226,22 +235,32 @@ export default function BuilderPage() {
         <Card className="border-t-4 border-t-teal-500">
           <CardContent className="pt-6 space-y-4">
             <div>
-              <Label>Form Title *</Label>
+              <div className="flex items-center justify-between mb-1">
+                <Label>Form Title *</Label>
+                <span className={`text-xs ${title.length >= LIMITS.formTitle ? 'text-red-500' : 'text-slate-400'}`}>
+                  {title.length}/{LIMITS.formTitle}
+                </span>
+              </div>
               <Input
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => setTitle(e.target.value.slice(0, LIMITS.formTitle))}
                 placeholder="e.g. Bug Report, Feature Request…"
-                className="mt-1 text-lg font-medium"
+                className="text-lg font-medium"
                 disabled={preview}
               />
             </div>
             <div>
-              <Label>Description</Label>
+              <div className="flex items-center justify-between mb-1">
+                <Label>Description</Label>
+                <span className={`text-xs ${description.length >= LIMITS.formDescription ? 'text-red-500' : 'text-slate-400'}`}>
+                  {description.length}/{LIMITS.formDescription}
+                </span>
+              </div>
               <Textarea
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => setDescription(e.target.value.slice(0, LIMITS.formDescription))}
                 placeholder="Explain what this form is for…"
-                className="mt-1"
+                className="mt-0"
                 rows={2}
                 disabled={preview}
               />

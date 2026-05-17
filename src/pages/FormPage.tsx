@@ -12,8 +12,9 @@ import LoadingSpinner from '@/components/LoadingSpinner'
 import { useToast } from '@/components/ui/toast'
 
 import { readBlob, storeBlob } from '@/lib/walrus'
-import { fetchFormObject, buildSubmitResponseTx } from '@/lib/sui'
-import { PACKAGE_ID } from '@/config'
+import { fetchFormObject, buildSubmitResponseTx, addSubmitResponseCommands } from '@/lib/sui'
+import { LIMITS } from '@/lib/utils'
+import { PACKAGE_ID, STORAGE_MODE } from '@/config'
 import type { AnswerValue, FormResponse, FormSchema, SuiFormObject } from '@/types'
 
 // ─── Form Page ────────────────────────────────────────────────────────────────
@@ -59,8 +60,32 @@ export default function FormPage() {
   const validateAnswers = (): string | null => {
     if (!schema) return null
     for (const field of schema.fields) {
-      if (!field.required) continue
       const val = answers[field.id]
+
+      // URL format check (applies even when not required, if a value is entered)
+      if (field.type === 'url' && val && typeof val === 'string') {
+        try {
+          const parsed = new URL(val)
+          if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            return `"${field.label}" must start with http:// or https://`
+          }
+        } catch {
+          return `"${field.label}" is not a valid URL`
+        }
+      }
+
+      // Character limit checks
+      if (field.type === 'text' && typeof val === 'string' && val.length > LIMITS.answerText) {
+        return `"${field.label}" exceeds the ${LIMITS.answerText}-character limit.`
+      }
+      if (field.type === 'textarea' && typeof val === 'string' && val.length > LIMITS.answerTextarea) {
+        return `"${field.label}" exceeds the ${LIMITS.answerTextarea}-character limit.`
+      }
+      if (field.type === 'url' && typeof val === 'string' && val.length > LIMITS.answerUrl) {
+        return `"${field.label}" exceeds the ${LIMITS.answerUrl}-character limit.`
+      }
+
+      if (!field.required) continue
       if (val === null || val === undefined || val === '') return `"${field.label}" is required.`
       if (Array.isArray(val) && val.length === 0) return `"${field.label}" is required.`
       if (typeof val === 'number' && val === 0) return `"${field.label}" requires a rating.`
@@ -96,13 +121,22 @@ export default function FormPage() {
         submitter: account.address,
       }
       toast({ type: 'info', title: 'Uploading response to Walrus…' })
-      const blobId = await storeBlob(response)
+      const blobId = await storeBlob(response, {
+        signAndExecuteTransaction: signAndExecute as (args: { transaction: unknown }) => Promise<{ digest: string; objectChanges?: unknown[] }>,
+        currentAddress: account.address,
+        // SDK mode: inject submit_response into the Walrus register PTB (saves 1 signature)
+        augmentRegisterTx: (tx, blobId) => {
+          addSubmitResponseCommands(tx, formObjectId!, blobId)
+        },
+      })
       setResponseBlobId(blobId)
 
-      // 2. Record on Sui
-      toast({ type: 'info', title: 'Recording on-chain…' })
-      const tx = buildSubmitResponseTx(formObjectId!, blobId)
-      await signAndExecute({ transaction: tx as never })
+      // Publisher mode: augmentRegisterTx was ignored above — run submit_response separately
+      if (STORAGE_MODE !== 'sdk') {
+        toast({ type: 'info', title: 'Recording on-chain…' })
+        const tx = buildSubmitResponseTx(formObjectId!, blobId)
+        await signAndExecute({ transaction: tx as never })
+      }
 
       setSubmitted(true)
       toast({ type: 'success', title: 'Response submitted!' })

@@ -104,6 +104,13 @@ npm run dev
       "label": "Project Repository",
       "description": "Provide a link to your public GitHub repository for review.",
       "required": true
+    },
+    {
+      "id": "q5",
+      "type": "img",
+      "label": "Product / Bug Image",
+      "description": "Upload a image showcasing a specific issue you found.",
+      "required": true
     }
   ]
 }
@@ -175,6 +182,13 @@ WalrusPulse/
 |---|---|
 | Store blob | `PUT https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=5` |
 | Read blob | `GET https://aggregator.walrus-testnet.walrus.space/v1/blobs/{blobId}` |
+
+
+### publish to Walrus
+
+```bash
+site-builder --config ~/.walrus/sites-config.yaml --context=mainnet deploy ./dist --epochs 1
+```
 
 ---
 

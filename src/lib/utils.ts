@@ -25,3 +25,20 @@ export function formatDate(iso: string): string {
 export function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// ─── Character limits ─────────────────────────────────────────────────────────
+
+export const LIMITS = {
+  formTitle: 120,
+  formDescription: 500,
+  fieldLabel: 150,
+  fieldHelperText: 300,
+  fieldPlaceholder: 200,
+  optionText: 100,
+  maxOptions: 20,
+  answerText: 500,
+  answerTextarea: 3000,
+  answerUrl: 2048,
+  uploadImageMb: 10,
+  uploadVideoMb: 100,
+} as const

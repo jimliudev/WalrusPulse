@@ -22,6 +22,7 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Badge } from './ui/badge'
 import { cn, generateId } from '@/lib/utils'
+import { LIMITS } from '@/lib/utils'
 import type { FieldType, FormField } from '@/types'
 
 // ─── Field type metadata ──────────────────────────────────────────────────────
@@ -113,9 +114,10 @@ export default function FieldEditor({ field, onChange, onDelete }: FieldEditorPr
         {/* Field label (editable) */}
         <input
           value={field.label}
-          onChange={(e) => update({ label: e.target.value })}
+          onChange={(e) => update({ label: e.target.value.slice(0, LIMITS.fieldLabel) })}
           className="flex-1 text-sm font-medium text-slate-800 bg-transparent border-none outline-none focus:outline-none placeholder:text-slate-400"
           placeholder="Field label…"
+          maxLength={LIMITS.fieldLabel}
         />
 
         {/* Type badge */}
@@ -166,8 +168,9 @@ export default function FieldEditor({ field, onChange, onDelete }: FieldEditorPr
             <Input
               placeholder="Describe what you're asking for…"
               value={field.description ?? ''}
-              onChange={(e) => update({ description: e.target.value })}
+              onChange={(e) => update({ description: e.target.value.slice(0, LIMITS.fieldHelperText) })}
               className="text-sm h-8"
+              maxLength={LIMITS.fieldHelperText}
             />
           </div>
 
@@ -178,8 +181,9 @@ export default function FieldEditor({ field, onChange, onDelete }: FieldEditorPr
               <Input
                 placeholder="Placeholder text…"
                 value={field.placeholder ?? ''}
-                onChange={(e) => update({ placeholder: e.target.value })}
+                onChange={(e) => update({ placeholder: e.target.value.slice(0, LIMITS.fieldPlaceholder) })}
                 className="text-sm h-8"
+                maxLength={LIMITS.fieldPlaceholder}
               />
             </div>
           )}
@@ -187,14 +191,20 @@ export default function FieldEditor({ field, onChange, onDelete }: FieldEditorPr
           {/* Options (for dropdown / checkbox) */}
           {hasOptions && (
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500 block">Options</Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-slate-500">Options</Label>
+                <span className={`text-xs ${(field.options?.length ?? 0) >= LIMITS.maxOptions ? 'text-red-500' : 'text-slate-400'}`}>
+                  {field.options?.length ?? 0}/{LIMITS.maxOptions}
+                </span>
+              </div>
               {(field.options ?? []).map((opt, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <Input
                     value={opt}
-                    onChange={(e) => updateOption(i, e.target.value)}
+                    onChange={(e) => updateOption(i, e.target.value.slice(0, LIMITS.optionText))}
                     className="text-sm h-8"
                     placeholder={`Option ${i + 1}`}
+                    maxLength={LIMITS.optionText}
                   />
                   <button
                     type="button"
@@ -210,7 +220,8 @@ export default function FieldEditor({ field, onChange, onDelete }: FieldEditorPr
                 variant="outline"
                 size="sm"
                 onClick={addOption}
-                className="w-full border-dashed text-slate-500"
+                disabled={(field.options?.length ?? 0) >= LIMITS.maxOptions}
+                className="w-full border-dashed text-slate-500 disabled:opacity-40"
               >
                 <Plus className="h-3 w-3 mr-1" /> Add Option
               </Button>

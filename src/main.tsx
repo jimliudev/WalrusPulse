@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/dapp-kit'
-import { getFullnodeUrl } from '@mysten/sui/client'
 import '@mysten/dapp-kit/dist/index.css'
 
 import App from './App'
@@ -12,9 +11,9 @@ import { SUI_NETWORK } from './config'
 import { ToastProvider } from './components/ui/toast'
 
 const { networkConfig } = createNetworkConfig({
-  testnet: { url: getFullnodeUrl('testnet') },
-  mainnet: { url: getFullnodeUrl('mainnet') },
-  devnet: { url: getFullnodeUrl('devnet') },
+  testnet: { url: 'https://fullnode.testnet.sui.io:443' },
+  mainnet: { url: 'https://fullnode.mainnet.sui.io:443' },
+  devnet: { url: 'https://fullnode.devnet.sui.io:443' },
 })
 
 const queryClient = new QueryClient({

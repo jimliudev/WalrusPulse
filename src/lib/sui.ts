@@ -1,6 +1,5 @@
 import { Transaction } from '@mysten/sui/transactions'
 import { MODULE_NAME, PACKAGE_ID } from '@/config'
-import type { SuiClient } from '@mysten/sui/client'
 import type { SuiFormObject } from '@/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -21,6 +20,22 @@ export function buildCreateFormTx(
   initialAdmins: string[] = [],
 ): Transaction {
   const tx = new Transaction()
+  addCreateFormCommands(tx, title, description, schemaBlobId, initialAdmins)
+  return tx
+}
+
+/**
+ * Inject create_form commands into an existing Transaction.
+ * Used for PTB merging: add these to the Walrus register tx so both operations
+ * share a single wallet signature.
+ */
+export function addCreateFormCommands(
+  tx: Transaction,
+  title: string,
+  description: string,
+  schemaBlobId: string,
+  initialAdmins: string[] = [],
+): void {
   tx.moveCall({
     target: `${PACKAGE_ID}::${MODULE_NAME}::create_form`,
     arguments: [
@@ -30,7 +45,6 @@ export function buildCreateFormTx(
       tx.pure('vector<address>', initialAdmins),
     ],
   })
-  return tx
 }
 
 /**
@@ -41,14 +55,27 @@ export function buildSubmitResponseTx(
   responseBlobId: string,
 ): Transaction {
   const tx = new Transaction()
+  addSubmitResponseCommands(tx, formObjectId, responseBlobId)
+  return tx
+}
+
+/**
+ * Inject submit_response commands into an existing Transaction.
+ * Used for PTB merging: add these to the Walrus register tx so both operations
+ * share a single wallet signature.
+ */
+export function addSubmitResponseCommands(
+  tx: Transaction,
+  formObjectId: string,
+  blobId: string,
+): void {
   tx.moveCall({
     target: `${PACKAGE_ID}::${MODULE_NAME}::submit_response`,
     arguments: [
       tx.object(formObjectId),
-      tx.pure('vector<u8>', encodeStr(responseBlobId)),
+      tx.pure('vector<u8>', encodeStr(blobId)),
     ],
   })
-  return tx
 }
 /**
  * Build a Transaction that deactivates (closes) a form.

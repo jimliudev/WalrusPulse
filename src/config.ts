@@ -17,3 +17,7 @@ export const SUI_NETWORK = (
 ) as 'testnet' | 'mainnet' | 'devnet'
 
 export const MODULE_NAME = 'walrus_pulse'
+
+export const STORAGE_MODE = (
+  import.meta.env.VITE_STORAGE_MODE || 'publisher'
+) as 'publisher' | 'sdk'
